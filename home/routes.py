@@ -32,7 +32,7 @@ class Routes(object):
     '''
     A way of keeping track of routes at the view level instead of trying to define them all inside the urls.py. The hope
     is to make it very straightforward and easy without having to resort to a lot of custom routing code. This will be
-    accomplished by writing routes to a list and ensuring each pattern is unique. It will then add any pattern mapppings
+    accomplished by writing routes to a list and ensuring each pattern is unique. It will then add any pattern mappings
     to the route for creation of named variables. An optional ROUTE_AUTO_CREATE setting can be added in project settings
     that will create a route for every app/controller/view and add it to the urls.py.
     '''
@@ -83,11 +83,11 @@ class Routes(object):
         @param apps: the INSTALLED_APPS setting in the settings for your Django app.
         @param with_app: set to true if you want the app name to be included in the route
         '''
-        def add_func(app, mod, func):
-            r = "{}/{}/(?:([^/])*/+)*".format(mod,func[0])
+        def add_func(app, mod, funcName, func):
+            r = "{}/{}/(?:([^/])*/+)*".format(mod.lower(),funcName.lower())
             if with_app:
-                r = "{}/{}".format(app, r)
-            self.add(r, func[1].as_view(), add_ending=False)
+                r = "{}/{}".format(app.lower(), r)
+            self.add(r, func, add_ending=False)
             
         for app in settings.INSTALLED_APPS:
             if 'django' != app.split('.')[0]: #only do it for non-django apps
@@ -100,8 +100,8 @@ class Routes(object):
                             try:
                                 inst = klass[1]()
                                 if isinstance(inst, View):
-                                    if not hasattr(inst, 'register_route') or(hasattr(inst, 'register_route') and inst.register_route):
-                                        add_func(app, mod, klass)
+                                    if not hasattr(inst, 'register_route') or (hasattr(inst, 'register_route') and inst.register_route):
+                                        add_func(app, mod, klass[0], klass[1].as_view())
                                     if hasattr(inst, 'routes'):
                                         self.add_view(klass[1])
                             except TypeError as e: #not a View class if init is required.
@@ -110,9 +110,9 @@ class Routes(object):
                                 pass
                         if mod == "views" and (hasattr(settings, 'REGISTER_VIEWS_PY_FUNCS') and settings.REGISTER_VIEWS_PY_FUNCS):
                             for func in inspect.getmembers(loaded_mod, inspect.isfunction):
-                                add_func(app, mod, func)
-                    except ImportError:
-                        raise TypeError("Routes type found in view module when settings.ROUTE_AUTO_CREATE has been set. Switch Routes to LazyRoutes.")
+                                add_func(app, mod, func[0], func[1])
+                    except ImportError as e:
+                        raise TypeError("Routes type found in view module when settings when ROUTE_AUTO_CREATE has been set. Switch Routes to LazyRoutes. Error: {}".format(e))
         
     def add(self, route, func, var_mappings= None, add_ending=True, **kwargs):
         '''
@@ -143,7 +143,7 @@ class Routes(object):
             else:
                 url_obj = url(url_route, func, kwargs)
             self.routes.append(url_obj)
-           
+            
         if var_mappings:
             for mapr in var_mappings:
                 check_if_list(mapr)
@@ -235,7 +235,7 @@ class Routes(object):
             prefix = None
         if hasattr(view, 'add_ending') and 'add_ending' not in kwargs:
             kwargs['add_ending'] = view.add_ending
-        print(view, type(view))
+        
         self.add_list(view.routes, view.as_view(), prefix = prefix, **kwargs)
 
 class LazyRoutes(Routes):
@@ -247,7 +247,7 @@ class LazyRoutes(Routes):
     
     def __init__(self):
         '''
-        Do nothing, just overriding the base __init__ to prevent the initilization there.
+        Do nothing, just overriding the base __init__ to prevent the initialization there.
         '''
         pass
         

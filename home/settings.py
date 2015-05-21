@@ -93,7 +93,7 @@ OPTIONS = {
         'CULL_FREQUENCY' : 0
     }
 
-CACHE_MIDDLEWARE_SECONDS= 60 #store for one minute as default
+CACHE_MIDDLEWARE_SECONDS= 0 #store for one minute as default
 
 CONN_MAX_AGE = 60*17
 

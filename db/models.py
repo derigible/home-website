@@ -4,11 +4,13 @@ Created on May 17, 2015
 @author: derigible
 '''
 from django.db import models as m
-from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
 from django.conf import settings
+from django.utils import timezone
+from datetime import datetime as dt
 
 class PosterManager(BaseUserManager):
-    def create_user(self, email, date_of_birth, password=None):
+    def create_user(self, email, password=None):
         """
         Creates and saves a Poster with the given email and password.
         """
@@ -29,8 +31,9 @@ class PosterManager(BaseUserManager):
         user.level = 5
         user.save(using=self._db)
         return user
+        
 
-class Poster(AbstractBaseUser, PermissionsMixin):
+class Poster(AbstractBaseUser):
     '''
     The poster of an Entry. Each poster is signed in and unique in the system.
     '''
@@ -87,11 +90,49 @@ class Poster(AbstractBaseUser, PermissionsMixin):
     def __str__(self):
         return self.email
 
+class Label(m.Model):
+    '''
+    Label of a comment or post. Only Posters of level 3 or above can create and update, level 1 and above to add, and level 4 and above to create/update/delete.
+    '''
+    name = m.TextField("The label name.", primary_key = True)
+    created = m.DateTimeField('When the label was created.', auto_now = True)
+    notes = m.TextField("Any notes about the label to help clarify what it is.", null=True)
+    creator = m.ForeignKey(Poster)
+    
+    def save(self, *args, **kwargs):
+        '''
+        Save the label and ensure that the user has the appropriate level to create, update, and save.
+        
+        Raises a PermissionError if not allowed.
+        '''
+        if self.creator.level < 3:
+            raise PermissionError('Poster is not of level 3 or above. Cannot save or update.')
+        super(Label, self).save(*args, **kwargs)
+        
+    def delete(self, *args, **kwargs):
+        '''
+        Ensure that the user has the appropriate level to delete object.
+        
+        Raises a PermissionError if not allowed.
+        '''
+        if self.creator.level < 4:
+            raise PermissionError('Poster is not of level 4 or above. Cannot save or update.')
+        super(Label, self).save(*args, **kwargs)
+
 class Entry(m.Model):
     created = m.DateTimeField('When the blogpost was created.', auto_now=True)
     last_updated = m.DateTimeField('When the blogpost was last modified.')
     text = m.TextField('The text of the entry.')
     user = m.ForeignKey(Poster)
+    
+    def save(self, *args, **kwargs):
+        '''
+        Save the entry and make sure that the last_updated is populated. This will be set
+        to created upon creation.
+        '''
+        if self.last_updated is None:
+            self.last_updated = dt.now(timezone.utc)
+        super(Entry, self).save(*args, **kwargs)
     
     class Meta:
         abstract = True
@@ -101,6 +142,7 @@ class Post(Entry):
     Models a blog entry.
     '''
     title = m.TextField('The title of the blogpost.')
+    labels = m.ManyToManyField(Label, related_name="posts")
     
 class Comment(Entry):
     '''
@@ -109,6 +151,7 @@ class Comment(Entry):
     commenter = m.EmailField('The email of the commenter.', max_length = 254)
     title = m.TextField('The title of the comment.', null=True)
     comment = m.ForeignKey('self', related_name = "comments")
+    labels = m.ManyToManyField(Label, related_name="comments")
     
 class Contact(m.Model):
     '''
