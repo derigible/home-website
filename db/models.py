@@ -76,10 +76,12 @@ class Poster(AbstractBaseUser):
             if len(self.password) < 5:
                 raise ValueError("The password needs to be over 4 characters long.")
         super(Poster, self).set_password(raw_password, *args, **kwargs)
-        
-    def get_level_name(self, level):
-        return self.levels(level)
     
+    @classmethod    
+    def get_level_name(self, level):
+        return self.levels[level]
+    
+    @classmethod
     def get_level_by_name(self,level_name):
         for l, name in self.levels.items():
             if name == level_name:
@@ -115,8 +117,8 @@ class Label(m.Model):
         
         Raises a PermissionError if not allowed.
         '''
-        if self.creator.level < 4:
-            raise PermissionError('Poster is not of level 4 or above. Cannot save or update.')
+        if self.creator.level < Poster.get_level_by_name("master"):
+            raise PermissionError('Poster is not of level "master" or above. Cannot save or update.')
         super(Label, self).save(*args, **kwargs)
 
 class Entry(m.Model):
@@ -144,6 +146,15 @@ class Post(Entry):
     title = m.TextField('The title of the blogpost.')
     labels = m.ManyToManyField(Label, related_name="posts")
     
+    def save(self, *args, **kwargs):
+        '''
+        Save the post only after ensuring that the user making it the has the sufficient level. Raise an AuthenticationError
+        if not.
+        '''
+        if self.user.level < Poster.get_level_by_name("creator"):
+            raise PermissionError('Poster is not of level "creator" or above. Cannot save or update.')
+        super(Post, self).save(*args, **kwargs)
+        
 class Comment(Entry):
     '''
     Comments of a comment or a blog. Reference the comments of a comments by calling comments on the comment object.
@@ -152,6 +163,15 @@ class Comment(Entry):
     title = m.TextField('The title of the comment.', null=True)
     comment = m.ForeignKey('self', related_name = "comments")
     labels = m.ManyToManyField(Label, related_name="comments")
+    
+    def save(self, *args, **kwargs):
+        '''
+        Save the comment only after ensuring that the user making it the has the sufficient level. Raise an AuthenticationError
+        if not.
+        '''
+        if self.user.level < Poster.get_level_by_name("commenter"):
+            raise PermissionError('Poster is not of level "commenter" or above. Cannot save or update.')
+        super(Post, self).save(*args, **kwargs)
     
 class Contact(m.Model):
     '''

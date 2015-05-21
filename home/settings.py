@@ -29,6 +29,7 @@ else:
     TEMPLATE_DEBUG = True
     ALLOWED_HOSTS = []
 
+SESSION_COOKIE_AGE = 60*60*24 #keep person logged in for one day right now
 
 # Application definition
 

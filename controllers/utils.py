@@ -5,10 +5,12 @@ Created on May 18, 2015
 '''
 from django.http.response import HttpResponse
 from django.core import serializers as sz
-from django.contrib.auth import login, SESSION_KEY
+from django.contrib.auth import login, SESSION_KEY, authenticate as auth
 from .errors import AuthenticationError
 from db.models import Poster
 import json
+from functools import wraps
+from django.utils.decorators import available_attrs
 
 def set_headers(response, headers):
     '''
@@ -20,7 +22,7 @@ def set_headers(response, headers):
     for key, val in headers.items:
         setattr(response, key, val)
 
-def response(request, qs, headers = {}):
+def response(request, qs, headers = {}, fields = []):
     '''
     Returns a response according to the type of request made. This is done by passing in the 
     Accept header with the desired Content-Type. If a recognizable content type is not found, defaults
@@ -29,14 +31,21 @@ def response(request, qs, headers = {}):
     @param request: the request object
     @param qs: an iterable of model objects
     @param headers: a dictionary of headers to add
+    @param fields: a list of fields to include
     @return the HttpResponse object
     '''
     accept = request.META.get('HTTP_ACCEPT', 'application/json')
     if 'xml' in accept:
-        data = sz.serialize("xml", qs)
+        if not fields:
+            data = sz.serialize("xml", qs)
+        else:
+            data = sz.serialize("xml", qs, fields = fields)
         ct = "application/xml"
     else: #defaults to json if nothing else is found of appropriate use
-        data = sz.serialize("json", qs)
+        if not fields:
+            data = sz.serialize("json", qs)
+        else:
+            data = sz.serialize("json", qs, fields = fields)
         ct = "application/json"
     resp = HttpResponse(data, content_type = ct)
     if headers:
@@ -93,7 +102,24 @@ def authenticated(func):
     def wrapper(request, *args, **kwargs):
         if request.user.is_authenticated():
             return func(request, *args, **kwargs)
-        return HttpResponse('{"err" : "Unauthenticated."}', content_type = "application/json", status = 401)
+        return err("Unauthenticated.", 401)
+    return wrapper
+
+def has_level(level):
+    '''
+    A decorator to check if the user has the correct level to view the object. If not, return a 403 error.
+    
+    @param func: the view function that needs to have proper level
+    @param level: the level to check
+    @return the response of the function if allowed, or an error response
+    '''
+    def wrapper(func):
+        @wraps(func, assigned=available_attrs(func))
+        def _wrapped(request, *args, **kwargs):
+            if request.user.level >= level:
+                return func(request, *args, **kwargs)
+            return err("Unauthorized. You are not of level {} or above.".format(Poster.get_level_name(level)), 403)
+        return _wrapped
     return wrapper
 
 def read(request):
@@ -109,7 +135,7 @@ def authenticate(request, email = None, password = None):
     '''
     Log the Poster in or raise an Unauthenticated error. If email or password is None, will attempt to extract from the
     request object. This assumes it is a json object. If other formats are used, you must pass in email and password
-    separately.
+    separately. The user object will be placed in the request object after successful login.
     
     @param request: the request to log in
     @param email: the email of the poster
@@ -125,9 +151,9 @@ def authenticate(request, email = None, password = None):
             raise ValueError("Faulty json. Could not parse.")
         except KeyError as ke:
             KeyError(ke)
-    login(request, None)
-    user = Poster.objects.get(email = email)
-    if not user.check_password(password):
+    user = auth(username = email, password = password)
+    if user is None:
         raise AuthenticationError()
-    
-    return request[SESSION_KEY]
+    login(request, user)
+#     if not user.check_password(password):
+    return request.session[SESSION_KEY]
