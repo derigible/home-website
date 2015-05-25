@@ -6,8 +6,6 @@ Created on May 17, 2015
 from django.db import models as m
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
 from django.conf import settings
-from django.utils import timezone
-from datetime import datetime as dt
 
 class PosterManager(BaseUserManager):
     def create_user(self, email, password=None):
@@ -97,7 +95,7 @@ class Label(m.Model):
     Label of a comment or post. Only Posters of level 3 or above can create and update, level 1 and above to add, and level 4 and above to create/update/delete.
     '''
     name = m.TextField("The label name.", primary_key = True)
-    created = m.DateTimeField('When the label was created.', auto_now = True)
+    created = m.DateTimeField('When the label was created.', auto_now_add = True)
     notes = m.TextField("Any notes about the label to help clarify what it is.", null=True)
     creator = m.ForeignKey(Poster)
     
@@ -122,19 +120,10 @@ class Label(m.Model):
         super(Label, self).save(*args, **kwargs)
 
 class Entry(m.Model):
-    created = m.DateTimeField('When the blogpost was created.', auto_now=True)
-    last_updated = m.DateTimeField('When the blogpost was last modified.')
+    created = m.DateTimeField('When the blogpost was created.', auto_now_add=True)
+    last_updated = m.DateTimeField('When the blogpost was last modified.', auto_now=True)
     text = m.TextField('The text of the entry.')
     user = m.ForeignKey(Poster)
-    
-    def save(self, *args, **kwargs):
-        '''
-        Save the entry and make sure that the last_updated is populated. This will be set
-        to created upon creation.
-        '''
-        if self.last_updated is None:
-            self.last_updated = dt.now(timezone.utc)
-        super(Entry, self).save(*args, **kwargs)
     
     class Meta:
         abstract = True
@@ -159,9 +148,9 @@ class Comment(Entry):
     '''
     Comments of a comment or a blog. Reference the comments of a comments by calling comments on the comment object.
     '''
-    commenter = m.EmailField('The email of the commenter.', max_length = 254)
     title = m.TextField('The title of the comment.', null=True)
-    comment = m.ForeignKey('self', related_name = "comments")
+    comment = m.ForeignKey('self', related_name = "comments", null=True)
+    post = m.ForeignKey(Post, related_name = "comments")
     labels = m.ManyToManyField(Label, related_name="comments")
     
     def save(self, *args, **kwargs):
@@ -171,7 +160,7 @@ class Comment(Entry):
         '''
         if self.user.level < Poster.get_level_by_name("commenter"):
             raise PermissionError('Poster is not of level "commenter" or above. Cannot save or update.')
-        super(Post, self).save(*args, **kwargs)
+        super(Comment, self).save(*args, **kwargs)
     
 class Contact(m.Model):
     '''
@@ -181,6 +170,7 @@ class Contact(m.Model):
     phone = m.TextField('The phone number of the contact.', null = True)
     business = m.TextField('The business of the contact, if applicable.', null = True)
     notes = m.TextField('Any notes they wish to pass along.', null = True)
+    contacted = m.DateTimeField("The datetime that the contact was created.", auto_now_add = True)
     user = m.ForeignKey(Poster, related_name = "contacts", null=True)
     
     def save(self, *args, **kwargs):

@@ -116,9 +116,9 @@ def has_level(level):
     def wrapper(func):
         @wraps(func, assigned=available_attrs(func))
         def _wrapped(request, *args, **kwargs):
-            if request.user.level >= level:
+            if request.user.level >= Poster.get_level_by_name(level):
                 return func(request, *args, **kwargs)
-            return err("Unauthorized. You are not of level {} or above.".format(Poster.get_level_name(level)), 403)
+            return err("Unauthorized. You are not of level {} or above.".format(level), 403)
         return _wrapped
     return wrapper
 
