@@ -7,6 +7,7 @@ from django.db import models as m
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
 from django.conf import settings
 
+
 class PosterManager(BaseUserManager):
     def create_user(self, email, password=None):
         """
@@ -30,13 +31,12 @@ class PosterManager(BaseUserManager):
         user.save(using=self._db)
         return user
         
-
 class Poster(AbstractBaseUser):
     '''
     The poster of an Entry. Each poster is signed in and unique in the system.
     '''
     email = m.EmailField('The email of the poster. This is also the username.', max_length = 254, unique=True)
-    joined_on = m.DateTimeField('The time the poster first joined our blog.', auto_now = True)
+    joined_on = m.DateTimeField('The time the poster first joined our blog.', auto_now_add = True)
     level = m.SmallIntegerField('The level of the user.', default = 0)
     
     objects = PosterManager()
@@ -97,7 +97,7 @@ class Label(m.Model):
     name = m.TextField("The label name.", primary_key = True)
     created = m.DateTimeField('When the label was created.', auto_now_add = True)
     notes = m.TextField("Any notes about the label to help clarify what it is.", null=True)
-    creator = m.ForeignKey(Poster)
+    user = m.ForeignKey(Poster)
     
     def save(self, *args, **kwargs):
         '''
@@ -105,7 +105,7 @@ class Label(m.Model):
         
         Raises a PermissionError if not allowed.
         '''
-        if self.creator.level < 3:
+        if self.user.level < 3:
             raise PermissionError('Poster is not of level 3 or above. Cannot save or update.')
         super(Label, self).save(*args, **kwargs)
         
@@ -115,7 +115,7 @@ class Label(m.Model):
         
         Raises a PermissionError if not allowed.
         '''
-        if self.creator.level < Poster.get_level_by_name("master"):
+        if self.user.level < Poster.get_level_by_name("master"):
             raise PermissionError('Poster is not of level "master" or above. Cannot save or update.')
         super(Label, self).save(*args, **kwargs)
 

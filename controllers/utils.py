@@ -28,6 +28,9 @@ def response(request, qs, headers = {}, fields = []):
     Accept header with the desired Content-Type. If a recognizable content type is not found, defaults
     to json. This is a utility for serializing objects.
     
+    If the query param single=true is found, then will return a single object if the queryset returns only
+    one object. Otherwise all queries are sent in a list by default. This option is only available for json.
+    
     @param request: the request object
     @param qs: an iterable of model objects
     @param headers: a dictionary of headers to add
@@ -35,6 +38,7 @@ def response(request, qs, headers = {}, fields = []):
     @return the HttpResponse object
     '''
     accept = request.META.get('HTTP_ACCEPT', 'application/json')
+    is_single = len(qs) == 1
     if 'xml' in accept:
         if not fields:
             data = sz.serialize("xml", qs)
@@ -46,6 +50,7 @@ def response(request, qs, headers = {}, fields = []):
             data = sz.serialize("json", qs)
         else:
             data = sz.serialize("json", qs, fields = fields)
+        data = data[1:-1] if is_single and request.GET.get("single", "false").lower() == "true" else data
         ct = "application/json"
     resp = HttpResponse(data, content_type = ct)
     if headers:
@@ -107,7 +112,8 @@ def authenticated(func):
 
 def has_level(level):
     '''
-    A decorator to check if the user has the correct level to view the object. If not, return a 403 error.
+    A decorator to check if the user has the correct level to view the object. If not, return a 403 error. Also checks if
+    the user is authenticated.
     
     @param func: the view function that needs to have proper level
     @param level: the level to check
@@ -116,6 +122,8 @@ def has_level(level):
     def wrapper(func):
         @wraps(func, assigned=available_attrs(func))
         def _wrapped(request, *args, **kwargs):
+            if not request.user.is_authenticated():
+                return err("Unauthenticated", 401)
             if request.user.level >= Poster.get_level_by_name(level):
                 return func(request, *args, **kwargs)
             return err("Unauthorized. You are not of level {} or above.".format(level), 403)

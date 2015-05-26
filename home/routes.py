@@ -7,8 +7,10 @@ Created on Mar 12, 2015
 from django.conf.urls import url, patterns
 from django.conf import settings
 import importlib as il
-import glob, os, sys, inspect
+import os, sys, inspect, glob
 from django.views.generic.base import View
+import fnmatch
+import pkgutil
 
 def check_if_list(lst):
     if isinstance(lst, str):
@@ -67,7 +69,7 @@ class Routes(object):
         arguments to the url class for anything between the forward slashes (ie. /). For example, say you have view inside 
         a module called foo, your route table would include a route as follows:
         
-            ^foo/view_name/(?([^/]*)/)*
+            ^foo/view_name/((?:[^/]/+)*) -> This returns a single argument with the args in a single string as so: arg1/arg2/arg3/../ split on '/' char
         
         Note that view functions that are not class-based must be included in the top-level directory of an app in a file
         called views.py if they are to be included. This does not make use of the Django app loader, so it is safe to put
@@ -83,37 +85,63 @@ class Routes(object):
         @param apps: the INSTALLED_APPS setting in the settings for your Django app.
         @param with_app: set to true if you want the app name to be included in the route
         '''
+        view_inst = View()
         def add_func(app, mod, funcName, func):
-            r = "{}/{}/(?:([^/])*/+)*".format(mod.lower(),funcName.lower())
+            r = "{}/{}/((?:[^/]/*)*)".format(mod.lower(),funcName.lower())
             if with_app:
                 r = "{}/{}".format(app.lower(), r)
-            self.add(r, func, add_ending=False)
+            self.add(r.replace('//', '/'), func, add_ending=False)
+        
+        def load_views(mod, mod_name, parent_mod_name = ""):
+            print("Information on the load_views:",mod, mod_name, parent_mod_name)
+            if parent_mod_name:
+                name_mod = parent_mod_name + '/' + mod_name
+            else:
+                name_mod = mod_name
+            for klass in inspect.getmembers(mod, inspect.isclass):
+                print(klass)
+                try:
+                    inst = klass[1]()
+                    if isinstance(inst, View) and type(inst) != type(view_inst): #we do not want to add the View class
+                        if not hasattr(inst, 'register_route') or (hasattr(inst, 'register_route') and inst.register_route):
+                            add_func(app, name_mod, klass[0], klass[1].as_view())
+                        if hasattr(inst, 'routes'):
+                            self.add_view(klass[1])
+                except TypeError as e: #not a View class if init requires input.
+                    if "'function' object is not subscriptable" in str(e):
+                        raise ValueError("Attempting to do something wrong")
+                    pass
+                if mod_name == "views" and (hasattr(settings, 'REGISTER_VIEWS_PY_FUNCS') and settings.REGISTER_VIEWS_PY_FUNCS):
+                    for func in inspect.getmembers(mod, inspect.isfunction):
+                        add_func(app, name_mod, func[0], func[1])
+        
+        def load_module(mod, pkg, path = ""):
+            '''
+            Load the module and get all of the modules in it.
+            '''
+            print("The module and pkg of the load_module:",mod, pkg, path)
+            loaded_app = il.import_module('.' + mod, pkg)
+            for finder, mname, ispkg in pkgutil.walk_packages([loaded_app.__path__[0]]):
+                print("Output of pkgutil: ",finder, mname, ispkg)
+                if ispkg:
+                    load_module(mname, loaded_app.__package__, path + '/' + mod)
+                views_mod = il.import_module('.' + mname, loaded_app.__package__)
+                load_views(views_mod, mname, path + '/' + mod) #Check if the module itself has any view classes
             
         for app in settings.INSTALLED_APPS:
+            app_name = app.split('.')[-1]
+            print()
+            print("the app: " + app_name)
             if 'django' != app.split('.')[0]: #only do it for non-django apps
                 loaded_app = il.import_module(app)
-                for p in glob.iglob(os.path.join(loaded_app.__path__[0], '*.py')):
-                    mod = p.split(os.sep)[-1][:-3]#get just the module name without the .py
-                    try:
-                        loaded_mod = il.import_module('.' + mod, loaded_app.__package__)
-                        for klass in inspect.getmembers(loaded_mod, inspect.isclass):
-                            try:
-                                inst = klass[1]()
-                                if isinstance(inst, View):
-                                    if not hasattr(inst, 'register_route') or (hasattr(inst, 'register_route') and inst.register_route):
-                                        add_func(app, mod, klass[0], klass[1].as_view())
-                                    if hasattr(inst, 'routes'):
-                                        self.add_view(klass[1])
-                            except TypeError as e: #not a View class if init is required.
-                                if "'function' object is not subscriptable" in str(e):
-                                    raise ValueError("Attempting to do something wrong")
-                                pass
-                        if mod == "views" and (hasattr(settings, 'REGISTER_VIEWS_PY_FUNCS') and settings.REGISTER_VIEWS_PY_FUNCS):
-                            for func in inspect.getmembers(loaded_mod, inspect.isfunction):
-                                add_func(app, mod, func[0], func[1])
-                    except ImportError as e:
-                        raise TypeError("Routes type found in view module when settings when ROUTE_AUTO_CREATE has been set. Switch Routes to LazyRoutes. Error: {}".format(e))
-        
+                print("Loaded app path: ", loaded_app.__path__[0])
+                for finder, mname, ispkg in pkgutil.walk_packages([loaded_app.__path__[0]]):
+                    if ispkg:
+                        load_module(mname, loaded_app.__package__)
+                    else:
+                        mod = il.import_module('.' + mname, loaded_app.__package__)
+                        load_views(mod, mname)
+   
     def add(self, route, func, var_mappings= None, add_ending=True, **kwargs):
         '''
         Add the name of the route, the value of the route as a unformatted string where the route looks like the following:
