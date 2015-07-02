@@ -7,6 +7,8 @@ from django.db import models as m
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
 from django.conf import settings
 
+from mviews.modelviews import ModelAsView as mav
+
 
 class PosterManager(BaseUserManager):
     def create_user(self, email, password=None):
@@ -16,7 +18,7 @@ class PosterManager(BaseUserManager):
         if not email:
             raise ValueError('Users must have an email address')
 
-        user = self.model(email=self.normalize_email(email))
+        user = self.manager(email=self.normalize_email(email))
 
         user.set_password(password)
         user.save(using=self._db)
@@ -90,7 +92,7 @@ class Poster(AbstractBaseUser):
     def __str__(self):
         return self.email
 
-class Label(m.Model):
+class Label(mav):
     '''
     Label of a comment or post. Only Posters of level 3 or above can create and update, level 1 and above to add, and level 4 and above to create/update/delete.
     '''
@@ -98,6 +100,9 @@ class Label(m.Model):
     created = m.DateTimeField('When the label was created.', auto_now_add = True)
     notes = m.TextField("Any notes about the label to help clarify what it is.", null=True)
     user = m.ForeignKey(Poster)
+    
+    register_route = True
+    model_name = __name__
     
     def save(self, *args, **kwargs):
         '''
@@ -119,11 +124,14 @@ class Label(m.Model):
             raise PermissionError('Poster is not of level "master" or above. Cannot save or update.')
         super(Label, self).save(*args, **kwargs)
 
-class Entry(m.Model):
+class Entry(mav):
     created = m.DateTimeField('When the blogpost was created.', auto_now_add=True)
     last_updated = m.DateTimeField('When the blogpost was last modified.', auto_now=True)
     text = m.TextField('The text of the entry.')
     user = m.ForeignKey(Poster)
+    
+    register_route = True
+    model_name = __name__
     
     class Meta:
         abstract = True
@@ -134,6 +142,8 @@ class Post(Entry):
     '''
     title = m.TextField('The title of the blogpost.')
     labels = m.ManyToManyField(Label, related_name="posts")
+    
+    model_name = __name__
     
     def save(self, *args, **kwargs):
         '''
@@ -153,6 +163,8 @@ class Comment(Entry):
     post = m.ForeignKey(Post, related_name = "comments")
     labels = m.ManyToManyField(Label, related_name="comments")
     
+    model_name = __name__
+    
     def save(self, *args, **kwargs):
         '''
         Save the comment only after ensuring that the user making it the has the sufficient level. Raise an AuthenticationError
@@ -162,7 +174,7 @@ class Comment(Entry):
             raise PermissionError('Poster is not of level "commenter" or above. Cannot save or update.')
         super(Comment, self).save(*args, **kwargs)
     
-class Contact(m.Model):
+class Contact(mav):
     '''
     Contact me references. Attempts to tie them to a Poster once a user is created.
     '''
@@ -172,6 +184,9 @@ class Contact(m.Model):
     notes = m.TextField('Any notes they wish to pass along.', null = True)
     contacted = m.DateTimeField("The datetime that the contact was created.", auto_now_add = True)
     user = m.ForeignKey(Poster, related_name = "contacts", null=True)
+    
+    register_route = True
+    model_name = __name__
     
     def save(self, *args, **kwargs):
         '''

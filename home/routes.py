@@ -7,9 +7,9 @@ Created on Mar 12, 2015
 from django.conf.urls import url, patterns
 from django.conf import settings
 import importlib as il
-import os, sys, inspect, glob
+import sys
+import inspect
 from django.views.generic.base import View
-import fnmatch
 import pkgutil
 
 def check_if_list(lst):
@@ -93,13 +93,11 @@ class Routes(object):
             self.add(r.replace('//', '/'), func, add_ending=False)
         
         def load_views(mod, mod_name, parent_mod_name = ""):
-            print("Information on the load_views:",mod, mod_name, parent_mod_name)
             if parent_mod_name:
                 name_mod = parent_mod_name + '/' + mod_name
             else:
                 name_mod = mod_name
             for klass in inspect.getmembers(mod, inspect.isclass):
-                print(klass)
                 try:
                     inst = klass[1]()
                     if isinstance(inst, View) and type(inst) != type(view_inst): #we do not want to add the View class
@@ -111,9 +109,9 @@ class Routes(object):
                     if "'function' object is not subscriptable" in str(e):
                         raise ValueError("Attempting to do something wrong")
                     pass
-                if mod_name == "views" and (hasattr(settings, 'REGISTER_VIEWS_PY_FUNCS') and settings.REGISTER_VIEWS_PY_FUNCS):
-                    for func in inspect.getmembers(mod, inspect.isfunction):
-                        add_func(app, name_mod, func[0], func[1])
+            if mod_name == "views" and (hasattr(settings, 'REGISTER_VIEWS_PY_FUNCS') and settings.REGISTER_VIEWS_PY_FUNCS):
+                for func in inspect.getmembers(mod, inspect.isfunction):
+                    add_func(app, name_mod, func[0], func[1])
         
         def load_module(mod, pkg, path = ""):
             '''
@@ -122,7 +120,6 @@ class Routes(object):
             print("The module and pkg of the load_module:",mod, pkg, path)
             loaded_app = il.import_module('.' + mod, pkg)
             for finder, mname, ispkg in pkgutil.walk_packages([loaded_app.__path__[0]]):
-                print("Output of pkgutil: ",finder, mname, ispkg)
                 if ispkg:
                     load_module(mname, loaded_app.__package__, path + '/' + mod)
                 views_mod = il.import_module('.' + mname, loaded_app.__package__)
@@ -130,11 +127,11 @@ class Routes(object):
             
         for app in settings.INSTALLED_APPS:
             app_name = app.split('.')[-1]
-            print()
-            print("the app: " + app_name)
+#             print()
+#             print("the app: " + app_name)
             if 'django' != app.split('.')[0]: #only do it for non-django apps
                 loaded_app = il.import_module(app)
-                print("Loaded app path: ", loaded_app.__path__[0])
+#                 print("Loaded app path: ", loaded_app.__path__[0])
                 for finder, mname, ispkg in pkgutil.walk_packages([loaded_app.__path__[0]]):
                     if ispkg:
                         load_module(mname, loaded_app.__package__)
