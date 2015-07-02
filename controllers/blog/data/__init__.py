@@ -21,7 +21,7 @@ class Entity(View):
     such as making the user field as nullable.
     '''
     register_route = False
-    manager = Entry
+    model = Entry
     
     def __init__(self, **kwargs):
         '''
@@ -34,7 +34,7 @@ class Entity(View):
         '''
         Simple helper method to get the m2m field names of the model.
         '''
-        return [str(m2m[0]).split('.')[-1] for m2m in self.manager._meta.get_m2m_with_model()]
+        return [str(m2m[0]).split('.')[-1] for m2m in self.model._meta.get_m2m_with_model()]
     
     def _get_qs(self, request, *args, **kwargs):
         '''
@@ -43,17 +43,17 @@ class Entity(View):
         '''
         args = args[0].split('/')[:-1]
         if not args:
-            qs = self.manager.objects.all()
+            qs = self.model.objects.all()
             if "ids" in request.GET:
                 ids = request.GET.get('ids').split(',')
                 qs = qs.filter(id__in = ids)
-            reqDict = {field : request.GET[field] for field in self.manager._meta.get_all_field_names() if field in request.GET}
+            reqDict = {field : request.GET[field] for field in self.model._meta.get_all_field_names() if field in request.GET}
             return qs.filter(**reqDict)      
         elif len(args) == 1:
-            return self.manager.objects.filter(id = args[0])
+            return self.model.objects.filter(id = args[0])
         else:
-            reqDict = {field : request.GET[field] for field in self.manager._meta.get_all_field_names() if field in request.GET}
-            return self.manager.objects.filter(id__in = args, **reqDict)
+            reqDict = {field : request.GET[field] for field in self.model._meta.get_all_field_names() if field in request.GET}
+            return self.model.objects.filter(id__in = args, **reqDict)
     
     def get(self, request, *args, **kwargs):
         '''
@@ -85,7 +85,7 @@ class Entity(View):
         }
         '''
         j = load(read(request))
-        bp = self.manager.objects.create(user = request.user, **j["data"])
+        bp = self.model.objects.create(user = request.user, **j["data"])
         if len(j) > 1: #there are many2many fields to add, lets add them
             for m2m in self.m2ms: #Get the name of the m2m used
                 if m2m in j and type(j.get(m2m) == list):
@@ -144,12 +144,12 @@ class Entity(View):
             if "ids" not in request.GET:
                 return err("Did not contain any valid ids to delete.")
             ids = request.GET.get("ids").split(',')
-            reqDict = {field : request.GET[field] for field in self.manager._meta.get_all_field_names() if field in request.GET}
-            deletes = self.manager.objects.filter(id__in = ids, **reqDict)
+            reqDict = {field : request.GET[field] for field in self.model._meta.get_all_field_names() if field in request.GET}
+            deletes = self.model.objects.filter(id__in = ids, **reqDict)
         elif len(args) == 1:
-            deletes = self.manager.objects.get(id = args[0])
+            deletes = self.model.objects.get(id = args[0])
         else:
-            deletes = self.manager.objects.filter(id__in = args)
+            deletes = self.model.objects.filter(id__in = args)
         
         deletes.delete()
         

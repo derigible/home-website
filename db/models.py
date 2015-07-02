@@ -18,7 +18,7 @@ class PosterManager(BaseUserManager):
         if not email:
             raise ValueError('Users must have an email address')
 
-        user = self.manager(email=self.normalize_email(email))
+        user = self.model(email=self.normalize_email(email))
 
         user.set_password(password)
         user.save(using=self._db)
@@ -102,7 +102,6 @@ class Label(mav):
     user = m.ForeignKey(Poster)
     
     register_route = True
-    model_name = __name__
     
     def save(self, *args, **kwargs):
         '''
@@ -131,7 +130,6 @@ class Entry(mav):
     user = m.ForeignKey(Poster)
     
     register_route = True
-    model_name = __name__
     
     class Meta:
         abstract = True
@@ -142,8 +140,6 @@ class Post(Entry):
     '''
     title = m.TextField('The title of the blogpost.')
     labels = m.ManyToManyField(Label, related_name="posts")
-    
-    model_name = __name__
     
     def save(self, *args, **kwargs):
         '''
@@ -162,8 +158,6 @@ class Comment(Entry):
     comment = m.ForeignKey('self', related_name = "comments", null=True)
     post = m.ForeignKey(Post, related_name = "comments")
     labels = m.ManyToManyField(Label, related_name="comments")
-    
-    model_name = __name__
     
     def save(self, *args, **kwargs):
         '''
@@ -186,7 +180,6 @@ class Contact(mav):
     user = m.ForeignKey(Poster, related_name = "contacts", null=True)
     
     register_route = True
-    model_name = __name__
     
     def save(self, *args, **kwargs):
         '''

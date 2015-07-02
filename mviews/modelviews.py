@@ -12,7 +12,6 @@ more.
 """
 
 from json import loads as load
-from sys import modules as mod
 
 from django.db import models as m
 from django.views.generic.base import View
@@ -20,48 +19,79 @@ from django.http.response import HttpResponse
 from django.core import serializers as sz
 
 
+def err(msg, status = 400):
+    '''
+    Send an error response.
+    
+    @param msg: the reason for the error
+    @param status: the status code of the error
+    @return the HttpResponse object
+    '''
+    resp = HttpResponse('{{"err" : "{}"}}'.format(msg), content_type = "application/json", status = status)
+    resp.reason_phrase = msg
+    return resp
+    
+def read(request):
+    '''
+    Read and decode the payload.
+    
+    @param request: the request object to read
+    @return the decoded request payload
+    '''
+    d = request.read()
+    if d:
+        try:
+            d = load(d.decode('utf-8'))
+        except ValueError as e:
+            raise ValueError("Not a valid json object: {}".format(e))
+    return d
+
 class ViewWrapper(View):
     """
     A wrapper to ensure that the view class never gets positional arguments so
     as to make it work with being combined with Models.
     """
-    
+    register_route = False
     def __init__(self, *args, **kwargs):
         super(ViewWrapper, self).__init__(**kwargs)
+        
+    def dispatch(self, request, *args, **kwargs):
+        #It makes sense why these are stored in the request, but i want them
+        #in the view for convenience purposes
+        self.accept = request.META.get('HTTP_ACCEPT', 'application/json')
+        self.params = request.GET
+        try:
+            self.data = read(request)
+        except ValueError as e:
+            return err(e)
+        return super(ViewWrapper, self).dispatch(request, *args, **kwargs)
 
 class ModelAsView(m.Model, ViewWrapper):
-    register_route = False
     model_name = None   
     
     @property
-    def model(self):
-        if self.__class__ is None:
-            raise AttributeError("model_name is None. You must provide a model_name attribute for your model.")
-        if not hasattr(self, "__model"):
-            print(self.__class___name)
-            self.__model = mod[self.__class__]
-            self.__model = self.__model()
-        print(self.__model, type(self.__model))
-        return self.__model
+    def m2ms(self):
+        if not hasattr(self, "_m2ms"):
+            self._m2ms = [str(m2m[0]).split('.')[-1] for m2m in self.__class__._meta.get_m2m_with_model()]
+        return self._m2ms
     
-    def _get_qs(self, request, *args, **kwargs):
+    def _get_qs(self, *args, **kwargs):
         '''
         A helper method to get the queryset, to be used for GET, PUT, and maybe DELETE. Look at the
         GET docs to see how this works.
         '''
-        print(self.__class__)
         args = args[0].split('/')[:-1]
         if not args:
             qs = self.__class__.objects.all()
-            if "ids" in request.GET:
-                ids = request.GET.get('ids').split(',')
+            if "ids" in self.params:
+                ids = self.params.get('ids').split(',')
                 qs = qs.filter(id__in = ids)
-            reqDict = {field : request.GET[field] for field in self.__class__._meta.get_all_field_names() if field in request.GET}
+            reqDict = {field : self.params[field] for field in self.__class__._meta.get_all_field_names() if field in self.params}
             return qs.filter(**reqDict)      
         elif len(args) == 1:
             return self.__class__.objects.filter(id = args[0])
         else:
-            reqDict = {field : request.GET[field] for field in self.__class__._meta.get_all_field_names() if field in request.GET}
+            reqDict = {field : self.params[field] for field in self.__class__._meta.get_all_field_names() if field in self.params}
             return self.__class__.objects.filter(id__in = args, **reqDict)
     
     def get(self, request, *args, **kwargs):
@@ -75,11 +105,10 @@ class ModelAsView(m.Model, ViewWrapper):
                 
         Note that the query params need to match the name of the manager fields in order to work.
         '''
-        print(request, args, kwargs)
-        qs = self._get_qs(request, *args, **kwargs)
-        if request.GET.get("expand", False):
+        qs = self._get_qs(*args, **kwargs)
+        if self.params.get("expand", False):
             qs = qs.select_related().prefetch_related()
-        return self.response(request, qs)
+        return self.response(qs)
     
     def post(self, request, *args, **kwargs):
         '''
@@ -94,13 +123,12 @@ class ModelAsView(m.Model, ViewWrapper):
             ]
         }
         '''
-        j = load(self.read(request))
-        bp = self.__class__.objects.create(user = request.user, **j["data"])
-        if len(j) > 1: #there are many2many fields to add, lets add them
+        bp = self.__class__.objects.create(user = request.user, **self.data["data"])
+        if len(self.data) > 1: #there are many2many fields to add, lets add them
             for m2m in self.m2ms: #Get the name of the m2m used
-                if m2m in j and type(j.get(m2m) == list):
-                    bp.labels.add(*j[m2m])
-        return self.response(request, (bp,))
+                if m2m in self.data and type(self.data.get(m2m)) == list:
+                    getattr(bp, m2m).add(*self.data[m2m])
+        return self.response((bp,))
     
     def put(self, request, *args, **kwargs):
         '''
@@ -121,16 +149,21 @@ class ModelAsView(m.Model, ViewWrapper):
         Note that you can update from a queryset relative to the rules of a get. Meaning you 
         can search for a set of entities to update at once.
         '''
-        j = load(self.read(request))
-        qs = self._get_qs(request, *args, **kwargs)
-        entity = qs.update(**j["data"])
-        if len(j) > 1: #there are many2many fields to add and delete, lets add them
+        qs = self._get_qs(*args, **kwargs)
+        if len(qs) > 1:
+            return err("Can only update one entity at a time.")
+        qs.update(**self.data["data"])
+        if len(self.data) > 1: #there are many2many fields to add and delete, lets add them
             for m2m in self.m2ms:
-                if "add_" + m2m in j and type(j.get(m2m), list):
-                    entity.labels.add(*j[m2m])
-                if "delete_" + m2m in j and type(j.get(m2m), list):
-                    entity.labels.remove(*j[m2m])
-        return self.other_response(request)
+                print(m2m)
+                am2m = "add_" + m2m
+                dm2m = "delete_" + m2m
+                if am2m in self.data and type(self.data.get(am2m)) == list:
+                    print("adding")
+                    getattr(qs[0], m2m).add(*self.data[am2m])
+                if dm2m in self.data and type(self.data.get(dm2m)) == list:
+                    getattr(qs[0], m2m).remove(*self.data[dm2m])
+        return self.other_response()
     
     def delete(self, request, *args, **kwargs):
         '''
@@ -151,10 +184,12 @@ class ModelAsView(m.Model, ViewWrapper):
         '''
         args = args[0].split('/')[:-1]
         if not args:
-            if "ids" not in request.GET:
-                return self.err("Did not contain any valid ids to delete.")
-            ids = request.GET.get("ids").split(',')
-            reqDict = {field : request.GET[field] for field in self.__class__._meta.get_all_field_names() if field in request.GET}
+            if "ids" not in self.params:
+                return err("Did not contain any valid ids to delete.")
+            ids = self.params.get("ids").split(',')
+            reqDict = {field : self.params[field] 
+                       for field in self.__class__._meta.get_all_field_names() 
+                       if field in self.params}
             deletes = self.__class__.objects.filter(id__in = ids, **reqDict)
         elif len(args) == 1:
             deletes = self.__class__.objects.get(id = args[0])
@@ -163,7 +198,7 @@ class ModelAsView(m.Model, ViewWrapper):
         
         deletes.delete()
         
-        return self.other_response(request)
+        return self.other_response()
     
     def set_headers(self, response, headers):
         '''
@@ -175,7 +210,7 @@ class ModelAsView(m.Model, ViewWrapper):
         for key, val in headers.items:
             setattr(response, key, val)
     
-    def response(self, request, qs, headers = {}, fields = []):
+    def response(self, qs, headers = {}, fields = []):
         '''
         Returns a response according to the type of request made. This is done by passing in the 
         Accept header with the desired Content-Type. If a recognizable content type is not found, defaults
@@ -190,9 +225,8 @@ class ModelAsView(m.Model, ViewWrapper):
         @param fields: a list of fields to include
         @return the HttpResponse object
         '''
-        accept = request.META.get('HTTP_ACCEPT', 'application/json')
         is_single = len(qs) == 1
-        if 'xml' in accept:
+        if 'xml' in self.accept:
             if not fields:
                 data = sz.serialize("xml", qs)
             else:
@@ -203,14 +237,14 @@ class ModelAsView(m.Model, ViewWrapper):
                 data = sz.serialize("json", qs)
             else:
                 data = sz.serialize("json", qs, fields = fields)
-            data = data[1:-1] if is_single and request.GET.get("single", "false").lower() == "true" else data
+            data = data[1:-1] if is_single and self.params.get("single", "false").lower() == "true" else data
             ct = "application/json"
         resp = HttpResponse(data, content_type = ct)
         if headers:
             self.set_headers(resp, headers)
         return resp
     
-    def other_response(self, request, data = None, headers = {}):
+    def other_response(self, data = None, headers = {}):
         '''
         Returns a response according to the type of request made. This is done by passing in the 
         Accept header with the desired Content-Type. If a recognizable content type is not found, defaults
@@ -220,9 +254,8 @@ class ModelAsView(m.Model, ViewWrapper):
         @param data: the data to send; if None will send nothing with status 204
         @return the HttpResponse object
         '''
-        accept = request.META.get('HTTP_ACCEPT', 'application/json')
         if data is not None:
-            if 'xml' in accept:
+            if 'xml' in self.accept:
                 ct = "application/xml"
             else: #defaults to json if nothing else is found of appropriate use
                 ct = "application/json"
@@ -235,27 +268,6 @@ class ModelAsView(m.Model, ViewWrapper):
         if headers:
             self.set_headers(resp, headers)
         return resp
-    
-    def err(self, msg, status = 400):
-        '''
-        Send an error response.
-        
-        @param msg: the reason for the error
-        @param status: the status code of the error
-        @return the HttpResponse object
-        '''
-        resp = HttpResponse('{{"err" : "{}"}}'.format(msg), content_type = "application/json", status = status)
-        resp.reason_phrase = msg
-        return resp
-    
-    def read(self, request):
-        '''
-        Read and decode the payload.
-        
-        @param request: the request object to read
-        @return the decoded request payload
-        '''
-        return request.read().decode('utf-8')
     
     class Meta:
         abstract = True
