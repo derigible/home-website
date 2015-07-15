@@ -60,14 +60,30 @@ class ViewWrapper(View):
         #in the view for convenience purposes
         self.accept = request.META.get('HTTP_ACCEPT', 'application/json')
         self.params = request.GET
+        self.fields = self.params.get('_fields', "")
+        self.expand = '_expand' in self.params
         try:
             self.data = read(request)
         except ValueError as e:
             return err(e)
         return super(ViewWrapper, self).dispatch(request, *args, **kwargs)
+    
+class ModelWrapper(m.Model):
+    """
+    A wrapper to ensure that the model class does not get called when a DELETE
+    method is sent. To delete a model, call the delete_entity method.
+    """
+    
+    def delete_entity(self, *args, **kwargs):
+        """
+        Call this method to delete a model instance.
+        """
+        super(ModelWrapper, self).delete(*args, **kwargs)
+        
+    class Meta:
+        abstract = True
 
-class ModelAsView(m.Model, ViewWrapper):
-    model_name = None   
+class ModelAsView(ModelWrapper, ViewWrapper):
     
     @property
     def m2ms(self):
@@ -75,24 +91,38 @@ class ModelAsView(m.Model, ViewWrapper):
             self._m2ms = [str(m2m[0]).split('.')[-1] for m2m in self.__class__._meta.get_m2m_with_model()]
         return self._m2ms
     
+    @property
+    def field_names(self):
+        if not hasattr(self, "_field_names"):
+            self._field_names = self.__class__._meta.get_all_field_names()
+        return self._field_names
+        
     def _get_qs(self, *args, **kwargs):
         '''
         A helper method to get the queryset, to be used for GET, PUT, and maybe DELETE. Look at the
         GET docs to see how this works.
         '''
+        def filter_by_pks(vals):
+            for f in self.field_names:
+                if getattr(self._meta.get_field_by_name(f)[0], "primary_key", False):
+                    return {f + "__in" : vals}
+            else:
+                return {}
         args = args[0].split('/')[:-1]
-        if not args:
-            qs = self.__class__.objects.all()
-            if "ids" in self.params:
-                ids = self.params.get('ids').split(',')
-                qs = qs.filter(id__in = ids)
-            reqDict = {field : self.params[field] for field in self.__class__._meta.get_all_field_names() if field in self.params}
-            return qs.filter(**reqDict)      
-        elif len(args) == 1:
-            return self.__class__.objects.filter(id = args[0])
-        else:
-            reqDict = {field : self.params[field] for field in self.__class__._meta.get_all_field_names() if field in self.params}
-            return self.__class__.objects.filter(id__in = args, **reqDict)
+        if "ids" in self.params:
+            args += self.params.get('ids').split(',')
+        
+        filtered = self.__class__.objects.all()
+        if len(args) == 1 and 'id' in self.field_names:
+            filtered = filtered.filter(id = args[0])
+        elif 'id' in self.field_names:
+            filtered = filtered.filter(id__in = args)
+        elif args:
+            filtered = filtered.filter(**filter_by_pks(args))            
+        if self.fields:
+            filtered.only(*[f for f in self.fields.split(',') if f in self.field_names])
+        reqDict = {field : self.params[field] for field in self.field_names if field in self.params} 
+        return filtered.filter(**reqDict)
     
     def get(self, request, *args, **kwargs):
         '''
@@ -104,9 +134,26 @@ class ModelAsView(m.Model, ViewWrapper):
             3) add the query param ids as a csv for those entities by id you want: ids=1,2,3,4,...
                 
         Note that the query params need to match the name of the manager fields in order to work.
+        
+        You may also pass in other filtering criteria by adding the key,value pair of a field
+        you wish to filter on. For example:
+        
+            name=Bob
+            
+        If there is a name field on the entity, will filter by the name Bob. Adding fields
+        that are not present on the entity does nothing. If you pass in the filter name=Bob
+        and no ids, will search only on that field. 
+        
+        A query with no filter will return the entirety of that entity's table. If you pass
+        in the keyword _expand, will get the objects related to this entity as well and
+        place them in the corresponding entity's object under a list with the name
+        of the m2m field as identifier.
+        
+        If the query _fields is passed in as a csv of desired fields, will attempt to retrieve only those
+        fields requested, otherwise all fields are returned.
         '''
         qs = self._get_qs(*args, **kwargs)
-        if self.params.get("expand", False):
+        if self.expand:
             qs = qs.select_related().prefetch_related()
         return self.response(qs)
     
@@ -138,16 +185,16 @@ class ModelAsView(m.Model, ViewWrapper):
             "data" : {
                 "<data_field_name>" : "<data>" | <data>, ...
             },
-            "add_<m2m>" : [
-                <m2m_id>,...
-            ],
-            "delete_<m2m>" : [
-                <m2m_id>,...
-            ]
+            "<m2m>" : {
+                "add" : [ .... ],
+                "delete" : [ .... ]
+            }
         }
         
         Note that you can update from a queryset relative to the rules of a get. Meaning you 
         can search for a set of entities to update at once.
+        
+        Filtering is done in the same way as GET.
         '''
         qs = self._get_qs(*args, **kwargs)
         if len(qs) > 1:
@@ -156,47 +203,30 @@ class ModelAsView(m.Model, ViewWrapper):
         if len(self.data) > 1: #there are many2many fields to add and delete, lets add them
             for m2m in self.m2ms:
                 print(m2m)
-                am2m = "add_" + m2m
-                dm2m = "delete_" + m2m
-                if am2m in self.data and type(self.data.get(am2m)) == list:
+                if m2m in self.data:
                     print("adding")
-                    getattr(qs[0], m2m).add(*self.data[am2m])
-                if dm2m in self.data and type(self.data.get(dm2m)) == list:
-                    getattr(qs[0], m2m).remove(*self.data[dm2m])
+                    if "add" in self.data[m2m] and type(self.data[m2m]) == list:
+                        getattr(qs[0], m2m).add(*self.data[m2m]['add'])
+                    if "delete" in self.data[m2m] and type(self.data[m2m]) == list:
+                        getattr(qs[0], m2m).remove(*self.data[m2m]['delete'])
         return self.other_response()
     
     def delete(self, request, *args, **kwargs):
         '''
-        Delete an entity. This is a no payload endpoint where you can delete either in bulk by adding
-        doing one of the three things:
+        Delete an entity. This is a no payload endpoint where you can delete either in bulk 
+        or singly.
         
-            1) a single entity: .../entity/<id>/ where you just add one id in the path
-            2) multiple entities: .../entity/<id>/<id2>/.../ where you add as many ids as you want in the path
-            3) leave the args blank and add query param with at least one query param called ids as follows:
-                
-                    ids=1,2,3,4,5
-                    
-                note that the ids are a csv.
-                
-            Note that the GET argument can also be used to help narrow down from the list of ids those that
-            contain other query attributes. Note that these query attributes need to have the names of the manager
-            fields, just like in getting objects.
+        Filtering is done in the same way as GET.
+        
+        Will return status 204 if successful.
         '''
         args = args[0].split('/')[:-1]
         if not args:
             if "ids" not in self.params:
                 return err("Did not contain any valid ids to delete.")
-            ids = self.params.get("ids").split(',')
-            reqDict = {field : self.params[field] 
-                       for field in self.__class__._meta.get_all_field_names() 
-                       if field in self.params}
-            deletes = self.__class__.objects.filter(id__in = ids, **reqDict)
-        elif len(args) == 1:
-            deletes = self.__class__.objects.get(id = args[0])
-        else:
-            deletes = self.__class__.objects.filter(id__in = args)
+        deletes = self._get_qs(*args, **kwargs)
         
-        deletes.delete()
+        deletes.delete_entity()
         
         return self.other_response()
     
@@ -210,7 +240,7 @@ class ModelAsView(m.Model, ViewWrapper):
         for key, val in headers.items:
             setattr(response, key, val)
     
-    def response(self, qs, headers = {}, fields = []):
+    def response(self, qs, headers = {}):
         '''
         Returns a response according to the type of request made. This is done by passing in the 
         Accept header with the desired Content-Type. If a recognizable content type is not found, defaults
@@ -227,16 +257,16 @@ class ModelAsView(m.Model, ViewWrapper):
         '''
         is_single = len(qs) == 1
         if 'xml' in self.accept:
-            if not fields:
+            if not self.fields:
                 data = sz.serialize("xml", qs)
             else:
-                data = sz.serialize("xml", qs, fields = fields)
+                data = sz.serialize("xml", qs, fields = self.fields)
             ct = "application/xml"
         else: #defaults to json if nothing else is found of appropriate use
-            if not fields:
+            if not self.fields:
                 data = sz.serialize("json", qs)
             else:
-                data = sz.serialize("json", qs, fields = fields)
+                data = sz.serialize("json", qs, fields = self.fields)
             data = data[1:-1] if is_single and self.params.get("single", "false").lower() == "true" else data
             ct = "application/json"
         resp = HttpResponse(data, content_type = ct)

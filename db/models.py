@@ -149,6 +149,9 @@ class Post(Entry):
         if self.user.level < Poster.get_level_by_name("creator"):
             raise PermissionError('Poster is not of level "creator" or above. Cannot save or update.')
         super(Post, self).save(*args, **kwargs)
+    
+    def __str__(self):
+        return self.title
         
 class Comment(Entry):
     '''
