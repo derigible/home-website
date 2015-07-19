@@ -41,6 +41,8 @@ class Poster(AbstractBaseUser):
     joined_on = m.DateTimeField('The time the poster first joined our blog.', auto_now_add = True)
     level = m.SmallIntegerField('The level of the user.', default = 0)
     
+    public_fields = ("id", "email", "joined_on", "level", "comment_set", "label_set", "post_set", "last_login")
+    
     objects = PosterManager()
     
     USERNAME_FIELD = 'email'

@@ -17,6 +17,9 @@ from django.db import models as m
 from django.views.generic.base import View
 from django.http.response import HttpResponse
 from django.core import serializers as sz
+from django.db import connection
+
+from serialize import serialize
 
 
 def err(msg, status = 400):
@@ -60,8 +63,10 @@ class ViewWrapper(View):
         #in the view for convenience purposes
         self.accept = request.META.get('HTTP_ACCEPT', 'application/json')
         self.params = request.GET
-        self.fields = self.params.get('_fields', "")
+        self.fields = [f for f in self.params.get('_fields', "").split(',') 
+                       if f in self.field_names]
         self.expand = '_expand' in self.params
+        self.sdepth = int(self.params['_depth']) if self.params.get('_depth', None) is not None and self.params.get('_depth', None).isdigit() else 0
         try:
             self.data = read(request)
         except ValueError as e:
@@ -92,6 +97,14 @@ class ModelAsView(ModelWrapper, ViewWrapper):
         return self._m2ms
     
     @property
+    def fks(self):
+        print(self._meta.get_all_related_objects())
+        print(self.field_names)
+        if not hasattr(self, "_fks"):
+            self._fks = [str(fk).split('.')[-1] for fk in self.field_names if getattr(self._meta.get_field_by_name(fk)[0], "foreign_key", False)]
+        return self._fks
+        
+    @property
     def field_names(self):
         if not hasattr(self, "_field_names"):
             self._field_names = self.__class__._meta.get_all_field_names()
@@ -111,16 +124,18 @@ class ModelAsView(ModelWrapper, ViewWrapper):
         args = args[0].split('/')[:-1]
         if "ids" in self.params:
             args += self.params.get('ids').split(',')
-        
         filtered = self.__class__.objects.all()
         if len(args) == 1 and 'id' in self.field_names:
             filtered = filtered.filter(id = args[0])
-        elif 'id' in self.field_names:
+        elif 'id' in self.field_names and args:
             filtered = filtered.filter(id__in = args)
         elif args:
             filtered = filtered.filter(**filter_by_pks(args))            
         if self.fields:
-            filtered.only(*[f for f in self.fields.split(',') if f in self.field_names])
+            if self.expand:
+                filtered.only(*self.fields)
+            else:
+                filtered.values(*self.fields)
         reqDict = {field : self.params[field] for field in self.field_names if field in self.params} 
         return filtered.filter(**reqDict)
     
@@ -151,10 +166,17 @@ class ModelAsView(ModelWrapper, ViewWrapper):
         
         If the query _fields is passed in as a csv of desired fields, will attempt to retrieve only those
         fields requested, otherwise all fields are returned.
+        
+        If the _depth field is included with a valid number, 
         '''
         qs = self._get_qs(*args, **kwargs)
         if self.expand:
             qs = qs.select_related().prefetch_related()
+        else:
+            qs = qs.values()
+        print(self.m2ms, self.fks)
+#         print(list(qs)[0].comments)
+#         print(list(qs)[0]._meta.get_field(self.field_names[2]).remote_field)
         return self.response(qs)
     
     def post(self, request, *args, **kwargs):
@@ -172,7 +194,7 @@ class ModelAsView(ModelWrapper, ViewWrapper):
         '''
         bp = self.__class__.objects.create(user = request.user, **self.data["data"])
         if len(self.data) > 1: #there are many2many fields to add, lets add them
-            for m2m in self.m2ms: #Get the name of the m2m used
+            for m2m in self.m2ms:
                 if m2m in self.data and type(self.data.get(m2m)) == list:
                     getattr(bp, m2m).add(*self.data[m2m])
         return self.response((bp,))
@@ -224,10 +246,8 @@ class ModelAsView(ModelWrapper, ViewWrapper):
         if not args:
             if "ids" not in self.params:
                 return err("Did not contain any valid ids to delete.")
-        deletes = self._get_qs(*args, **kwargs)
-        
+        deletes = self._get_qs(*args, **kwargs)        
         deletes.delete_entity()
-        
         return self.other_response()
     
     def set_headers(self, response, headers):
@@ -263,11 +283,12 @@ class ModelAsView(ModelWrapper, ViewWrapper):
                 data = sz.serialize("xml", qs, fields = self.fields)
             ct = "application/xml"
         else: #defaults to json if nothing else is found of appropriate use
-            if not self.fields:
-                data = sz.serialize("json", qs)
-            else:
-                data = sz.serialize("json", qs, fields = self.fields)
-            data = data[1:-1] if is_single and self.params.get("single", "false").lower() == "true" else data
+            data = serialize(self, qs)
+#             if not self.fields:
+#                 data = sz.serialize("json", qs)
+#             else:
+#                 data = sz.serialize("json", qs, fields = self.fields)
+#             data = data[1:-1] if is_single and self.params.get("single", "false").lower() == "true" else data
             ct = "application/json"
         resp = HttpResponse(data, content_type = ct)
         if headers:
