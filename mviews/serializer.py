@@ -18,6 +18,8 @@ from collections import OrderedDict as od
 
 from django.http.response import HttpResponse as resp
 from django.core.serializers.json import DjangoJSONEncoder as djson
+from django.utils import six
+from django.db.models.fields.related import RelatedField
 from django.db import models
 from django.db.models.manager import Manager
 
@@ -35,35 +37,24 @@ def _serialize_xml(mview, qs, expand):
     raise NotImplementedError("Parsing of query sets to xml not yet supported.")
 
 def foreign_obj_to_dict(mview, fobj, depth):
-    print("*******************")
-    print("getting new obj: {}".format(fobj))
     if hasattr(fobj, "public_fields"):
         fields = fobj.public_fields
     else:
         fields = fobj._meta.get_all_field_names()
     fkDict = {}
     for f in fields:
-        print(type(f), f)
-#         try:
         fo = getattr(fobj, f)
-#         except AttributeError:
-#             fo = fobj.serializable_value(f)
-        print()
-        print(f)
         if isinstance(fo, Manager):
-            print("manager")
             if mview.sdepth >= depth:
                 fkDict[f] = foreign_rel_to_dict(mview, fo, depth + 1)
 #             else:
 #                 fkDict[f] = fobj.serializable_value(f)
         elif isinstance(fo, models.Model):
-            print("model")
             if mview.sdepth >= depth:
                 fkDict[f] = foreign_obj_to_dict(mview, fo, depth + 1)
 #             else:
 #                 fkDict[f] = fobj.serializable_value(f + "_id")
         else:
-            print("other")
             fkDict[f] = fobj.serializable_value(f)
     return fkDict
 
@@ -99,17 +90,17 @@ def _serialize_json(mview, qs):
             obj = {}
             vals.append(obj)
             for f in field_names:
-                field = getattr(m, f)
+                try:
+                    field = getattr(m, f)
+                except AttributeError:
+                    continue #not a field on the model
                 # Check if has the all() method. If so, is a manager.
                 if isinstance(field, Manager):
-                    print("Getting the foreign values of {}".format(f))
                     obj[f] = foreign_rel_to_dict(mview, field, 1) 
                 elif isinstance(field, models.Model):
-                    print("Getting the object values of {}".format(f))
                     obj[f] = foreign_obj_to_dict(mview, field, 1)                     
                 else:
                     obj[f] = field
-        print(rslt)
         rslt = json.dumps(rslt, cls=djson)
         
     return rslt

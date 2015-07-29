@@ -17,9 +17,9 @@ from django.db import models as m
 from django.views.generic.base import View
 from django.http.response import HttpResponse
 from django.core import serializers as sz
-from django.db import connection
+from django.contrib.auth.models import AbstractBaseUser
 
-from serialize import serialize
+from .serializer import serialize
 
 
 def err(msg, status = 400):
@@ -72,8 +72,18 @@ class ViewWrapper(View):
         except ValueError as e:
             return err(e)
         return super(ViewWrapper, self).dispatch(request, *args, **kwargs)
+
+class BaseModelWrapper():
+    """
+    A wrapper to help define what a model wrapper will need. This is necessary
+    since the AbstractBaseUser model is a model already and you can't sublass
+    from two models. Or something like that.
+    """
     
-class ModelWrapper(m.Model):
+    def delete_entity(self, *args, **kwargs):
+        raise NotImplementedError("This had not been implemented.")
+    
+class ModelWrapper(BaseModelWrapper, m.Model):
     """
     A wrapper to ensure that the model class does not get called when a DELETE
     method is sent. To delete a model, call the delete_entity method.
@@ -87,8 +97,27 @@ class ModelWrapper(m.Model):
         
     class Meta:
         abstract = True
+        
+class ABUWrapper(BaseModelWrapper, AbstractBaseUser):
+    """
+    A wrapper to ensure that the user model does not get called when a DELETE
+    method is sent. To delete a user, call the delete_entity method.
+    """
+    
+    def delete_entity(self, *args, **kwargs):
+        """
+        Call this method to delete a model instance.
+        """
+        super(ABUWrapper, self).delete(*args, **kwargs)
+        
+    class Meta:
+        abstract = True
 
-class ModelAsView(ModelWrapper, ViewWrapper):
+class BaseModelAsView(BaseModelWrapper, ViewWrapper):
+    """
+    A base class that should inherit this first, then a Modelwrapper, than a
+    ViewWrapper.
+    """
     
     @property
     def m2ms(self):
@@ -174,9 +203,6 @@ class ModelAsView(ModelWrapper, ViewWrapper):
             qs = qs.select_related().prefetch_related()
         else:
             qs = qs.values()
-        print(self.m2ms, self.fks)
-#         print(list(qs)[0].comments)
-#         print(list(qs)[0]._meta.get_field(self.field_names[2]).remote_field)
         return self.response(qs)
     
     def post(self, request, *args, **kwargs):
@@ -191,12 +217,20 @@ class ModelAsView(ModelWrapper, ViewWrapper):
                 <m2m_id>,...
             ]
         }
+        
+        If your model requires that the user is registered on create, then
+        add the register_user_on_create = <user_model_field_name> where the
+        value is the name of the field the user model is in. 
         '''
-        bp = self.__class__.objects.create(user = request.user, **self.data["data"])
+        user_field_name = getattr(self, 'register_user_on_create', '')
+        if user_field_name:
+            self.data["data"][user_field_name] = request.user
+        bp = self.__class__.objects.create(**self.data["data"])
         if len(self.data) > 1: #there are many2many fields to add, lets add them
             for m2m in self.m2ms:
                 if m2m in self.data and type(self.data.get(m2m)) == list:
                     getattr(bp, m2m).add(*self.data[m2m])
+        self.expand = True
         return self.response((bp,))
     
     def put(self, request, *args, **kwargs):
@@ -275,7 +309,6 @@ class ModelAsView(ModelWrapper, ViewWrapper):
         @param fields: a list of fields to include
         @return the HttpResponse object
         '''
-        is_single = len(qs) == 1
         if 'xml' in self.accept:
             if not self.fields:
                 data = sz.serialize("xml", qs)
@@ -284,11 +317,6 @@ class ModelAsView(ModelWrapper, ViewWrapper):
             ct = "application/xml"
         else: #defaults to json if nothing else is found of appropriate use
             data = serialize(self, qs)
-#             if not self.fields:
-#                 data = sz.serialize("json", qs)
-#             else:
-#                 data = sz.serialize("json", qs, fields = self.fields)
-#             data = data[1:-1] if is_single and self.params.get("single", "false").lower() == "true" else data
             ct = "application/json"
         resp = HttpResponse(data, content_type = ct)
         if headers:
@@ -320,5 +348,13 @@ class ModelAsView(ModelWrapper, ViewWrapper):
             self.set_headers(resp, headers)
         return resp
     
+    class Meta:
+        abstract = False     
+        
+class ModelAsView(ModelWrapper, BaseModelAsView):
+    class Meta:
+        abstract = True  
+
+class UserModelAsView(ABUWrapper, BaseModelAsView):
     class Meta:
         abstract = True
